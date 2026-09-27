@@ -29,12 +29,14 @@ const field = {
   isConnected: true, labels: [], childNodes: [], parentElement: {innerText: label},
   getAttribute: key => attrs[key] ?? null,
   closest: () => null, matches: () => false, checkVisibility: () => true,
+  contains: other => other === field,
   getBoundingClientRect: () => ({x: 10, y: 10, width: 200, height: 25}),
 };
 const document = {
   body: {}, documentElement: {scrollHeight: 700}, title: 'Fixture',
   querySelectorAll: () => [field],
   getElementById: () => null,
+  elementFromPoint: () => field,
   createTreeWalker: () => ({nextNode: () => null}),
   createRange: () => ({}),
 };

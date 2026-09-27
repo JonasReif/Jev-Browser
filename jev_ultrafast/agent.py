@@ -73,7 +73,7 @@ class Agent:
             if state["status"] in {"done", "blocked"}:
                 raise ValueError("This run has stopped. Start a fresh demo.")
             if len(state["decisions"]) >= MAX_STEPS * 2:
-                raise ValueError("Reached the demo's model-call budget")
+                raise ValueError("Reached the demo's policy-decision budget")
             state["decision"] = choose(state["page"], state["goal"], state["history"])
             state["decisions"].append(
                 {
@@ -135,6 +135,10 @@ class Agent:
                     "page_changed": None,
                     "url": page["url"],
                     "usage": decision["usage"],
+                    "usage_attempts": decision.get("usage_attempts", []),
+                    "request_count": decision.get("request_count", 1),
+                    "text_usage_attempts": helper.get("usage_attempts", []) if helper else [],
+                    "text_request_count": helper.get("request_count", 0) if helper else 0,
                     "executed_ms": round((time.perf_counter() - state["started_at"]) * 1000),
                     "elapsed_ms": state["elapsed_ms"],
                 }

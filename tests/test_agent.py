@@ -113,6 +113,113 @@ def test_click_cannot_consume_a_text_target(monkeypatch):
         model.choose(page(), "Find a book", [])
 
 
+def test_invalid_policy_response_retries_whole_decision_before_action(monkeypatch):
+    requests = []
+
+    def post(_url, _key, body):
+        requests.append(body)
+        if len(requests) == 1:
+            return {"model": "test", "usage": {"prompt_tokens": 10},
+                    "answers": {"operation": {"choice": "CLICK"}}}
+        return {"model": "test", "answers": {
+            "operation": choice(body["questions"]["operation"]["criteria"], "CLICK"),
+            "click_target": choice(body["questions"]["click_target"]["criteria"], "2"),
+        }, "usage": {"prompt_tokens": 20}}
+
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test")
+    monkeypatch.setattr(model, "post_json", post)
+
+    decision = model.choose(page(), "Click Go", [])
+
+    assert decision["choice"] == "e3"
+    assert len(requests) == 2
+    assert decision["request_count"] == 2
+    assert decision["usage_attempts"] == [{"prompt_tokens": 10}, {"prompt_tokens": 20}]
+
+
+def test_missing_policy_answers_retries_whole_decision(monkeypatch):
+    requests = []
+
+    def post(_url, _key, body):
+        requests.append(body)
+        if len(requests) == 1:
+            return {"model": "test", "answers": None}
+        return {"model": "test", "answers": {
+            "operation": choice(body["questions"]["operation"]["criteria"], "CLICK"),
+            "click_target": choice(body["questions"]["click_target"]["criteria"], "2"),
+        }}
+
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test")
+    monkeypatch.setattr(model, "post_json", post)
+
+    decision = model.choose(page(), "Click Go", [])
+
+    assert decision["choice"] == "e3"
+    assert len(requests) == 2
+
+
+def test_submitted_search_does_not_offer_the_same_submit_button(monkeypatch):
+    p = page()
+    p["url"] = "https://example.test/search?q=JavaScript+Promise&page=1"
+    p["text"] = "Found 4,172 documents."
+    p["actions"] = [
+        {"id": "e1", "kind": "fill", "label": "textbox", "role": "textbox",
+         "value": "JavaScript Promise", "node": 10},
+        {"id": "e2", "kind": "click", "label": "Search", "role": "button",
+         "value": "", "node": 20},
+        {"id": "e4", "kind": "press_enter", "label": "Submit Search with Enter",
+         "role": "searchbox", "value": "JavaScript Promise", "node": 10},
+        {"id": "e3", "kind": "click", "label": "PromiseRejectionEvent", "role": "link",
+         "value": "", "node": 30},
+        {"id": "e5", "kind": "click", "label": "Search", "role": "link",
+         "value": "", "href": "/search", "node": 40},
+        {"id": "e6", "kind": "click", "label": "Search", "role": "link",
+         "value": "", "href": "/docs/Search", "node": 50},
+        {"id": "scroll_down", "kind": "scroll", "label": "Scroll down"},
+    ]
+
+    def post(_url, _key, body):
+        targets = body["questions"]["click_target"]["criteria"]
+        assert len([target for target in targets.values()
+                    if target["element"].split("] ", 1)[-1] == "Search"]) == 1
+        assert "TYPE_TEXT" in body["questions"]["operation"]["criteria"]
+        assert "PRESS_ENTER" not in body["questions"]["operation"]["criteria"]
+        return {"model": "test", "answers": {
+            "operation": choice(body["questions"]["operation"]["criteria"], "TYPE_TEXT"),
+            "type_text_target": choice(body["questions"]["type_text_target"]["criteria"], "1"),
+        }}
+
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test")
+    monkeypatch.setattr(model, "post_json", post)
+
+    assert model.choose(p, "Find the JavaScript Promise reference", [])["choice"] == "e1"
+
+
+def test_empty_search_results_field_does_not_offer_submit_controls(monkeypatch):
+    p = page()
+    p["url"] = "https://example.test/search"
+    p["actions"] = [
+        {"id": "e1", "kind": "fill", "label": "textbox", "role": "textbox",
+         "value": "", "node": 10},
+        {"id": "e2", "kind": "click", "label": "Search", "role": "button",
+         "value": "", "node": 20},
+        {"id": "e3", "kind": "click", "label": "Search", "role": "link",
+         "value": "", "href": "/search", "node": 30},
+    ]
+
+    def post(_url, _key, body):
+        assert "CLICK" not in body["questions"]["operation"]["criteria"]
+        return {"model": "test", "answers": {
+            "operation": choice(body["questions"]["operation"]["criteria"], "TYPE_TEXT"),
+            "type_text_target": choice(body["questions"]["type_text_target"]["criteria"], "1"),
+        }}
+
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test")
+    monkeypatch.setattr(model, "post_json", post)
+
+    assert model.choose(p, "Find the JavaScript Promise reference", [])["choice"] == "e1"
+
+
 def test_target_head_receives_control_state_and_full_next_step_rules(monkeypatch):
     p = page()
     p["actions"].insert(0, {

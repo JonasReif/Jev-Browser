@@ -58,7 +58,9 @@ class Browser:
                         if (stopped) return;
                         const ids=(field?.getAttribute('aria-controls')||field?.getAttribute('aria-owns')||'')
                           .split(/\\s+/).filter(Boolean);
-                        const roots=ids.length ? ids.map(id=>document.getElementById(id)).filter(Boolean) : [document];
+                        const root=field?.getRootNode() || document;
+                        const roots=ids.length ? ids.map(id=>root.getElementById?.(id) ||
+                          document.getElementById(id)).filter(Boolean) : [root];
                         const options=roots.flatMap(root=>[...root.querySelectorAll('[role="option"]')]);
                         if (++frames>=2 && (!autocomplete || options.some(e=>{
                           const r=e.getBoundingClientRect();
@@ -143,7 +145,10 @@ def browser_operation(request):
             # Code-owned node IDs refer to actual observed elements, never model-generated selectors.
             target = evaluate("""(action => {
               const e=window.__jevFast?.nodes.get(action.node);
-              if (!e?.isConnected || e.matches(':disabled') || e.closest('[aria-disabled="true"],[inert]') ||
+              let blocked=false;
+              for (let node=e; node; node=node.parentElement || node.getRootNode?.().host)
+                if (node.matches?.('[aria-disabled="true"],[aria-hidden="true"],[inert]')) blocked=true;
+              if (!e?.isConnected || e.matches(':disabled') || blocked ||
                   !e.checkVisibility({checkOpacity:true,checkVisibilityCSS:true})) return null;
               if (action.kind==='fill' && (e.readOnly || e.getAttribute('aria-readonly')==='true')) return null;
               if (action.kind==='press_enter' &&
@@ -154,7 +159,15 @@ def browser_operation(request):
                       /search/i.test(action.label))))) return null;
               const r=e.getBoundingClientRect(), x=r.x+r.width/2, y=r.y+r.height/2;
               if (!r.width || !r.height || x<0 || y<0 || x>=innerWidth || y>=innerHeight) return null;
-              if (!e.contains(document.elementFromPoint(x,y))) return null;
+              let hit=document.elementFromPoint(x,y);
+              let hittable=false;
+              while (hit?.shadowRoot) {
+                if (e.contains(hit)) hittable=true;
+                const deeper=hit.shadowRoot.elementFromPoint(x,y);
+                if (!deeper || deeper===hit) break;
+                hit=deeper;
+              }
+              if (!hittable && !e.contains(hit)) return null;
               if (action.kind==='select') {
                 if (e.tagName!=='SELECT' || ![...e.options].some(o=>o.value===action.value &&
                     !o.disabled && !o.closest('optgroup[disabled]'))) return null;
@@ -175,7 +188,7 @@ def browser_operation(request):
                 if kind == "press_enter":
                     focused = evaluate("""(action => {
                       const e=window.__jevFast?.nodes.get(action.node);
-                      return document.activeElement===e && e?.value===action.value;
+                      return e?.getRootNode().activeElement===e && e.value===action.value;
                     })(""" + json.dumps(action) + ")")
                     if not focused:
                         raise StalePage("Search field changed or lost focus before Enter. Observe again.")

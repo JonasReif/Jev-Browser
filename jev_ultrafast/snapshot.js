@@ -6,14 +6,49 @@
     const id=cache.ids.get(e); cache.nodes.set(id,e); return id;
   };
   for (const [id,e] of cache.nodes) if (!e.isConnected) cache.nodes.delete(id);
+  const roots=[], ordered=[];
+  const visit = root => {
+    roots.push(root);
+    for (const e of root.querySelectorAll('*')) {
+      ordered.push(e);
+      if (e.shadowRoot) visit(e.shadowRoot);
+    }
+  };
+  visit(document);
+  const all = selector => {
+    const matching=new Set(roots.flatMap(root=>[...root.querySelectorAll(selector)]));
+    return ordered.filter(e=>matching.has(e));
+  };
+  const composedClosest = (e,selector) => {
+    for (let node=e; node; node=node.parentElement || node.getRootNode?.().host)
+      if (node.matches?.(selector)) return node;
+    return null;
+  };
   const safe = e => !['password','file','hidden'].includes(e.type);
-  const visible = e => !e.closest('[aria-hidden="true"],[inert]') &&
+  const visible = e => !composedClosest(e,'[aria-hidden="true"],[inert]') &&
     e.checkVisibility({checkOpacity:true,checkVisibilityCSS:true});
+  const hittable = (e,x,y) => {
+    let hit=document.elementFromPoint(x,y);
+    while (hit) {
+      if (e.contains(hit)) return true;
+      if (!hit.shadowRoot) break;
+      const deeper=hit.shadowRoot.elementFromPoint(x,y);
+      if (!deeper || deeper===hit) break;
+      hit=deeper;
+    }
+    return false;
+  };
   const name = (e,seen=new Set()) => {
     if (!e || seen.has(e)) return '';
     seen.add(e);
+    if (e.tagName==='SLOT') {
+      const assigned=e.assignedNodes?.({flatten:true}) || [];
+      if (assigned.length) return assigned.map(n=>n.nodeType===3 ? n.textContent :
+        n.nodeType===1 ? name(n,seen) : '').join(' ').trim();
+    }
     const referenced=(e.getAttribute('aria-labelledby')||'').split(/\s+/)
-      .map(id=>name(document.getElementById(id),seen)).filter(Boolean).join(' ');
+      .map(id=>name(e.getRootNode?.().getElementById?.(id) || document.getElementById(id),seen))
+      .filter(Boolean).join(' ');
     return referenced || e.getAttribute('aria-label') ||
       [...(e.labels||[])].map(l=>name(l,seen)).filter(Boolean).join(' ') ||
       (['button','submit','reset'].includes(e.type) ? e.value : '') || e.getAttribute('alt') ||
@@ -42,24 +77,28 @@
     return null;
   };
   cache.pageKey=()=>[performance.timeOrigin,location.href,scrollX,scrollY,innerWidth,innerHeight,
-    [...document.querySelectorAll('input,textarea,select')].filter(safe)
+    all('input,textarea,select').filter(safe)
       .map(e=>[identity(e),e.value,e.checked,e.selectedIndex,e.disabled,e.readOnly])];
   cache.guard=e=>{
     if (!e?.isConnected || !visible(e)) return null;
-    const scope=e.closest('form,dialog,[role="dialog"],article,li,tr,[role="row"]') || e.parentElement;
+    const scope=composedClosest(e,'form,dialog,[role="dialog"],article,li,tr,[role="row"]') ||
+      e.parentElement || e.getRootNode?.().host;
     return [identity(e),role(e),name(e),e.value??null,e.checked??null,e.selectedIndex??null,
       e.readOnly??null,e.matches(':disabled'),e.getAttribute('aria-disabled'),
       e.getAttribute('aria-expanded'),e.getAttribute('aria-checked'),e.getAttribute('aria-selected'),
       e.getAttribute('href'),scope?.innerText?.slice(0,6000)||''];
   };
   const actions=[];
-  for (const e of document.querySelectorAll(selector)) {
-    if (!safe(e) || !visible(e) || e.matches(':disabled') || e.closest('[aria-disabled="true"]')) continue;
+  for (const e of all(selector)) {
+    if (!safe(e) || !visible(e) || e.matches(':disabled') ||
+        composedClosest(e,'[aria-disabled="true"]')) continue;
     const r=e.getBoundingClientRect(), x=r.x+r.width/2, y=r.y+r.height/2, rname=role(e);
-    if (!rname || r.width<=0 || r.height<=0 || x<0 || y<0 || x>=innerWidth || y>=innerHeight) continue;
+    if (!rname || r.width<=0 || r.height<=0 || x<0 || y<0 || x>=innerWidth || y>=innerHeight ||
+        !hittable(e,x,y)) continue;
     if (rname==='gridcell' && e.querySelector('button,[role="button"]')) continue;
     const base={node:identity(e),role:rname,label:name(e)||rname,
       rect:{x:r.x,y:r.y,w:r.width,h:r.height}};
+    if (rname==='link') base.href=e.getAttribute('href')||'';
     for (const key of ['checked','selected','expanded']) {
       const value=e.getAttribute('aria-'+key);
       if (value!==null) base[key]=value;
@@ -76,7 +115,8 @@
       const value='value' in e ? String(e.value) :
         e.isContentEditable || rname==='combobox' ? e.innerText.trim() : '';
       actions.push({...base,kind:editable?'fill':'click',value});
-      if (editable) actions.push({...base,kind:'click',value,label:'Open '+base.label});
+      if (editable && e.getRootNode?.()?.activeElement!==e)
+        actions.push({...base,kind:'click',value,label:'Open '+base.label});
       // A populated search field may need Enter when no submit control is exposed.
       // Keep the action tied to this observed node; never offer it for email fields.
       if (editable && value.trim() && (e.type==='search' || rname==='searchbox' ||
@@ -84,16 +124,26 @@
         actions.push({...base,kind:'press_enter',value,label:'Submit '+base.label+' with Enter'});
     }
   }
-  const words=[], walker=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT);
+  const words=[];
   const range=document.createRange(); let node,length=0;
-  while ((node=walker.nextNode()) && length<6000) {
-    const value=node.textContent.trim(), parent=node.parentElement;
-    if (!value || !parent || parent.closest('script,style,noscript,template') || !visible(parent)) continue;
-    range.selectNodeContents(node); const r=range.getBoundingClientRect();
-    if (r.width>0 && r.height>0 && r.bottom>0 && r.top<innerHeight && r.right>0 && r.left<innerWidth) {
-      words.push(value); length+=value.length;
+  const collectText = root => {
+    const walker=document.createTreeWalker(root,NodeFilter.SHOW_ELEMENT|NodeFilter.SHOW_TEXT);
+    while (length<6000 && (node=walker.nextNode())) {
+      if (node.nodeType===1) {
+        if (node.shadowRoot) collectText(node.shadowRoot);
+        continue;
+      }
+      if (node.nodeType!==3) continue;
+      const value=node.textContent.trim(), parent=node.parentElement;
+      if (!value || !parent || composedClosest(parent,'script,style,noscript,template') ||
+          !visible(parent)) continue;
+      range.selectNodeContents(node); const r=range.getBoundingClientRect();
+      if (r.width>0 && r.height>0 && r.bottom>0 && r.top<innerHeight && r.right>0 && r.left<innerWidth) {
+        words.push(value); length+=value.length;
+      }
     }
-  }
+  };
+  collectText(document.body);
   const text=words.join('\n').slice(0,6000), height=document.documentElement.scrollHeight;
   const page_key=cache.pageKey(), guards={};
   for (const a of actions) if (!(a.node in guards)) guards[a.node]=cache.guard(cache.nodes.get(a.node));
@@ -104,8 +154,13 @@
   const omitted_actions=Math.max(0,actions.length-250);
   actions.splice(250);
   actions.forEach((a,i)=>a.id='e'+(i+1));
-  if (scrollY+innerHeight<height-2) actions.push({id:'scroll_down',kind:'scroll',label:'Scroll down',delta:560});
-  if (scrollY>0) actions.push({id:'scroll_up',kind:'scroll',label:'Scroll up',delta:-560});
+  const scrollLocked=typeof getComputedStyle==='function' &&
+    [document.documentElement,document.body].some(e=>e &&
+      ['hidden','clip'].includes(getComputedStyle(e).overflowY));
+  if (!scrollLocked && scrollY+innerHeight<height-2)
+    actions.push({id:'scroll_down',kind:'scroll',label:'Scroll down',delta:560});
+  if (!scrollLocked && scrollY>0)
+    actions.push({id:'scroll_up',kind:'scroll',label:'Scroll up',delta:-560});
   actions.push({id:'wait',kind:'wait',label:'Wait for the page to update'});
   return {url:location.href,title:document.title,w:innerWidth,h:innerHeight,text,
     scroll:{y:scrollY,height},actions,marker,page_key,guards,omitted_actions};
