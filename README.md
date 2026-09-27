@@ -2,6 +2,17 @@
 
 # Jev Ultrafast ⚡
 
+## About this fork
+
+This is a fork of [browser-use/jev-ultrafast](https://github.com/browser-use/jev-ultrafast) (MIT license). The core agent is theirs. I built the integration layer on top, working with Claude Code:
+
+- **MCP server** exposing `browser_task`, `read_page` and `list_upload_files`, so Claude Desktop/Cowork can hand scoped browser subtasks to Jev
+- **Sandboxed file uploads**: only files inside a configured folder can be attached; paths outside it (including `../` and symlinks) are rejected, and the model never sees file paths
+- **One-click desktop extension** (`.mcpb`) with a setup form for API keys and the upload folder
+- **Setup notes** for Claude Desktop and for ChatGPT via a tunnel, including the security trade-offs (see [Use it from Claude or ChatGPT (MCP)](#use-it-from-claude-or-chatgpt-mcp))
+
+I use it in my own Claude Cowork setup for recurring multi-step web workflows.
+
 > [!IMPORTANT]
 > **The Browser Use Cloud waitlist is open.** Get early access to ultrafast browser agents in the cloud.
 > **[Join the waitlist →](https://browser-use.com/ultrafast?utm_source=github&utm_medium=readme&utm_campaign=jev-ultrafast)**
