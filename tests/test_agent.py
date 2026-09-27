@@ -161,6 +161,7 @@ def test_missing_text_credential_stops_before_guessing(monkeypatch):
 def runner():
     a = loop.Agent.__new__(loop.Agent)
     a.screenshots = False
+    a.files = {}
     a.pending_text = None
     p = page()
     a.state = {
@@ -264,6 +265,111 @@ def test_interrupted_dropdown_mutation_cannot_be_retried_as_stale(monkeypatch, r
         browser_operation({"operation": "act", "session": "test", "action": {
             "id": "e1", "kind": "select", "node": 1, "value": "Design",
         }})
+    assert cdp.call_count == 1
+
+
+def upload_page():
+    state = page()
+    upload = {"id": "e9", "kind": "upload", "label": "CV", "role": "file", "value": "", "accept": ".pdf", "node": 30}
+    state["actions"].insert(0, upload)
+    return state
+
+
+def test_uploads_are_offered_only_with_caller_files(monkeypatch):
+    elements, targets, _ = model.action_space(upload_page()["actions"], uploads=False)
+    assert "UPLOAD_FILE" not in targets and all(e["role"] != "file" for e in elements)
+    elements, targets, _ = model.action_space(upload_page()["actions"])
+    assert targets["UPLOAD_FILE"] == {"1": upload_page()["actions"][0]}
+    assert elements[0]["accept"] == ".pdf" and elements[0]["operations"] == ["UPLOAD_FILE"]
+    bodies = []
+
+    def post(_url, _key, body):
+        bodies.append(body)
+        q = body["questions"]
+        return {"model": "jev", "answers": {
+            "operation": choice(list(q["operation"]["criteria"]), "CLICK"),
+            "click_target": choice(list(q["click_target"]["criteria"]), "2"),
+        }}
+
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test")
+    monkeypatch.setattr(model, "post_json", post)
+    model.choose(upload_page(), "Apply", [])
+    assert "UPLOAD_FILE" not in bodies[0]["questions"]["operation"]["criteria"]
+    assert "upload_file" not in bodies[0]["questions"]
+
+
+def test_upload_chooses_an_observed_input_and_a_caller_file(monkeypatch):
+    def post(_url, _key, body):
+        q = body["questions"]
+        assert q["upload_file"]["criteria"] == {"f1": {"file": "cv.pdf"}, "f2": {"file": "letter.pdf"}}
+        assert body["state"]["files_to_upload"] == ["cv.pdf", "letter.pdf"]
+        return {"model": "jev", "answers": {
+            "operation": choice(list(q["operation"]["criteria"]), "UPLOAD_FILE"),
+            "upload_file_target": choice(list(q["upload_file_target"]["criteria"]), "1"),
+            "upload_file": choice(["f1", "f2"], "f2"),
+            "click_target": choice(list(q["click_target"]["criteria"]), "2"),
+        }}
+
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test")
+    monkeypatch.setattr(model, "post_json", post)
+    result = model.choose(upload_page(), "Apply with my cover letter", [], ["cv.pdf", "letter.pdf"])
+    assert (result["choice"], result["operation"], result["file"]) == ("e9", "UPLOAD_FILE", "letter.pdf")
+
+
+def test_invented_file_choice_is_rejected(monkeypatch):
+    def post(_url, _key, body):
+        q = body["questions"]
+        return {"model": "jev", "answers": {
+            "operation": choice(list(q["operation"]["criteria"]), "UPLOAD_FILE"),
+            "upload_file_target": choice(["1"], "1"),
+            "upload_file": choice(["f1", "f9"], "f9"),
+        }}
+
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test")
+    monkeypatch.setattr(model, "post_json", post)
+    with pytest.raises(ValueError, match="Invalid TypeSafe response"):
+        model.choose(upload_page(), "Apply", [], ["cv.pdf"])
+
+
+def test_agent_uploads_the_chosen_file_by_its_fixed_path(runner, tmp_path):
+    runner.files = {"cv.pdf": str(tmp_path / "cv.pdf")}
+    runner.state["page"] = upload_page()
+    runner.state["decision"] = {**decision("e9"), "operation": "UPLOAD_FILE", "file": "cv.pdf"}
+    runner.command("act", {"fingerprint": runner.state["page"]["fingerprint"]})
+    args, kwargs = runner.state["browser"].act.call_args
+    assert args[0]["id"] == "e9" and kwargs == {"text": "cv.pdf", "file": str(tmp_path / "cv.pdf")}
+    assert runner.state["history"][-1]["text"] == "cv.pdf"
+
+
+def test_agent_requires_existing_distinct_upload_files(tmp_path):
+    (tmp_path / "a").mkdir()
+    (tmp_path / "a" / "cv.pdf").write_text("1")
+    (tmp_path / "cv.pdf").write_text("2")
+    for files in [[tmp_path / "missing.pdf"], [tmp_path / "cv.pdf", tmp_path / "a" / "cv.pdf"]]:
+        with pytest.raises(ValueError, match="distinct names"):
+            loop.Agent("https://example.test/", "Apply", files=files)
+
+
+def test_upload_sets_files_on_the_observed_node_without_a_dialog(monkeypatch):
+    import jev_ultrafast.browser as browser
+
+    cdp = Mock(side_effect=[{"result": {"objectId": "obj-1"}}, {}])
+    monkeypatch.setattr(browser, "cdp", cdp)
+    browser_operation({"operation": "act", "session": "s", "file": "/up/cv.pdf",
+                       "action": {"id": "e9", "kind": "upload", "node": 30}})
+    assert "nodes.get(30)" in cdp.call_args_list[0].kwargs["expression"]
+    assert cdp.call_args_list[1].args == ("DOM.setFileInputFiles",)
+    assert cdp.call_args_list[1].kwargs == {"session_id": "s", "files": ["/up/cv.pdf"], "objectId": "obj-1"}
+
+
+def test_missing_upload_node_is_stale_before_any_input(monkeypatch):
+    import jev_ultrafast.browser as browser
+
+    cdp = Mock(return_value={"result": {"type": "object", "subtype": "null"}})
+    monkeypatch.setattr(browser, "cdp", cdp)
+    with pytest.raises(StalePage):
+        browser_operation({"operation": "act", "session": "s", "file": "/up/cv.pdf",
+                           "action": {"id": "e9", "kind": "upload", "node": 30}})
     assert cdp.call_count == 1
 
 

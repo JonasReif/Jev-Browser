@@ -53,6 +53,16 @@
       e.getAttribute('href'),scope?.innerText?.slice(0,6000)||''];
   };
   const actions=[];
+  // File inputs are often hidden behind a styled label. Offer one when it or its trigger is visible.
+  for (const e of document.querySelectorAll('input[type="file"]')) {
+    if (e.disabled || e.closest('[aria-disabled="true"],[inert]')) continue;
+    const trigger=visible(e) ? e : [...(e.labels||[])].find(visible) ||
+      (e.parentElement && visible(e.parentElement) ? e.parentElement : null);
+    if (!trigger) continue;
+    const label=name(e) || (trigger===e ? '' : name(trigger).slice(0,120)) || 'File upload';
+    actions.push({node:identity(e),role:'file',kind:'upload',label,accept:e.accept||'',
+      multiple:e.multiple,value:[...(e.files||[])].map(f=>f.name).join(', ')});
+  }
   for (const e of document.querySelectorAll(selector)) {
     if (!safe(e) || !visible(e) || e.matches(':disabled') || e.closest('[aria-disabled="true"]')) continue;
     const r=e.getBoundingClientRect(), x=r.x+r.width/2, y=r.y+r.height/2, rname=role(e);

@@ -97,12 +97,14 @@ class Browser:
             return current == [page["page_key"], page["guards"].get(str(node))]
         return self.evaluate(MARKER) == page["marker"]
 
-    def act(self, action, page, text=None):
+    def act(self, action, page, text=None, file=None):
         if not self.fresh(page, action):
             raise StalePage("Page changed since this decision. Observe again.")
         if action["kind"] == "wait":
             time.sleep(0.1)
-        result = browser_operation({"operation": "act", "session": self.session, "action": action, "text": text})
+        result = browser_operation(
+            {"operation": "act", "session": self.session, "action": action, "text": text, "file": file}
+        )
         self.after_input = action if action["kind"] != "wait" else None
         return result
 
@@ -135,7 +137,20 @@ def browser_operation(request):
     if operation == "act":
         action = request["action"]
         kind = action["kind"]
-        if kind == "scroll":
+        if kind == "upload":
+            if type(action["node"]) is not int or not request.get("file"):
+                raise ValueError("Invalid observed upload")
+            # Resolve the observed node to a handle. Chrome sets the file and fires input/change; no dialog opens.
+            handle = call(
+                "Runtime.evaluate",
+                expression=f"(e => e?.isConnected && e.type === 'file' && !e.disabled ? e : null)"
+                f"(window.__jevFast?.nodes.get({action['node']}))",
+            )
+            object_id = handle.get("result", {}).get("objectId")
+            if handle.get("exceptionDetails") or not object_id:
+                raise StalePage("Upload target changed. Observe again.")
+            call("DOM.setFileInputFiles", files=[request["file"]], objectId=object_id)
+        elif kind == "scroll":
             call("Input.dispatchMouseEvent", type="mouseWheel", x=550, y=650, deltaX=0, deltaY=action["delta"])
         elif kind != "wait":
             if type(action["node"]) is not int:

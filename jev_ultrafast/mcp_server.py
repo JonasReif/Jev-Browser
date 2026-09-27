@@ -20,12 +20,17 @@ from .demo import load_environment
 from .model import action_space
 
 PAGE_TEXT = 8000
+MAX_LISTED = 200
+# MCPB hosts may pass unset optional settings as empty or unexpanded placeholders.
+SETTINGS = ("TYPESAFE_API_KEY", "TEXT_MODEL_API_KEY", "TEXT_MODEL_BASE_URL", "TEXT_MODEL", "JEV_UPLOAD_DIR")
 SERVER = FastMCP(
     "jev-browser",
     instructions=(
         "browser_task drives a real Chrome tab toward one natural-language goal and returns the executed steps "
         "and the final page. A 'done' status is the agent's own judgment: check final_page before reporting "
-        "success. read_page observes a page without model calls. The tab uses the host's Chrome profile."
+        "success. read_page observes a page without model calls. The tab uses the host's Chrome profile. "
+        "To upload, the file must be in the upload folder: list_upload_files shows it, and browser_task takes "
+        "those names in files."
     ),
 )
 # Browser Harness drives one Chrome through one daemon. Run one owned tab at a time.
@@ -45,6 +50,24 @@ async def in_thread(fn, *args):
 def check_url(url):
     if not url.startswith(("http://", "https://")):
         raise ValueError("url must start with http:// or https://")
+
+
+def upload_root():
+    root = Path(os.environ.get("JEV_UPLOAD_DIR") or Path.home() / "JevUploads").expanduser().resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def upload_paths(names):
+    # Only files inside the upload folder. resolve() follows symlinks, so links cannot point elsewhere.
+    root = upload_root()
+    paths = []
+    for name in names:
+        path = (root / name).resolve()
+        if not path.is_relative_to(root) or not path.is_file():
+            raise ValueError(f"{name!r} is not a file in the upload folder {root}")
+        paths.append(path)
+    return paths
 
 
 def page_summary(page):
@@ -78,22 +101,31 @@ def task_result(agent, status, error):
 @SERVER.tool(
     annotations=ToolAnnotations(title="Run a browser task", destructiveHint=True, openWorldHint=True),
 )
-async def browser_task(goal: str, url: str, max_seconds: int = 120, screenshot: bool = False, ctx: Context = None):
-    """Open url in a new Chrome tab and let the Jev agent pursue goal with clicks, typing, and dropdowns.
+async def browser_task(
+    goal: str,
+    url: str,
+    files: list[str] | None = None,
+    max_seconds: int = 120,
+    screenshot: bool = False,
+    ctx: Context = None,
+):
+    """Open url in a new Chrome tab and let the Jev agent pursue goal with clicks, typing, dropdowns, and uploads.
 
     goal: one natural-language task, including every value the agent needs (names, dates, search terms).
     url: the http(s) page to start from.
+    files: names from list_upload_files that the agent may attach to file inputs. Say in goal which file goes where.
     max_seconds: wall-clock budget; the run stops after the current step once it is exceeded.
     screenshot: also return a JPEG of the final page.
 
     Returns status (done, blocked, timeout, error), executed steps, model-call counts, and the final page text.
-    The agent cannot upload files, handle iframes or pop-up tabs, or solve CAPTCHAs.
+    The agent cannot handle iframes, pop-up tabs, or native file dialogs, or solve CAPTCHAs.
     """
     check_url(url)
     if not os.environ.get("TYPESAFE_API_KEY"):
         raise ValueError("TYPESAFE_API_KEY is not set on the MCP server")
+    paths = upload_paths(files or [])
     async with LOCK:
-        agent = await in_thread(Agent, url, goal)
+        agent = await in_thread(lambda: Agent(url, goal, files=paths))
         try:
             deadline = time.monotonic() + max(5, max_seconds)
             status, error, reported = "timeout", None, 0
@@ -135,6 +167,20 @@ async def read_page(url: str, screenshot: bool = False):
     return [result, image] if image else result
 
 
+@SERVER.tool(annotations=ToolAnnotations(title="List upload files", readOnlyHint=True, openWorldHint=False))
+def list_upload_files():
+    """List the files browser_task may upload. Only files in this folder can be attached to web forms."""
+    root = upload_root()
+    found = sorted(
+        p for p in root.rglob("*") if p.is_file() and not p.name.startswith(".") and p.resolve().is_relative_to(root)
+    )
+    return {
+        "folder": str(root),
+        "files": [{"name": p.relative_to(root).as_posix(), "bytes": p.stat().st_size} for p in found[:MAX_LISTED]],
+        "omitted": max(0, len(found) - MAX_LISTED),
+    }
+
+
 def configure_http(port, public_hosts, token):
     SERVER.settings.port = port
     SERVER.settings.streamable_http_path = f"/{token}/mcp"
@@ -155,6 +201,10 @@ def main():
         "--public-host", action="append", default=[], help="tunnel hostname that forwards to this port (repeatable)"
     )
     args = parser.parse_args()
+    for key in SETTINGS:
+        value = os.environ.get(key, "")
+        if not value.strip() or "${" in value:
+            os.environ.pop(key, None)
     load_environment()
     load_environment(Path(__file__).parent.parent / ".env")
     if not args.http:

@@ -7,7 +7,7 @@ import time
 
 import httpx
 
-from .questions import NEXT_ACTION, TARGET, TEXT_VALUE
+from .questions import FILE, NEXT_ACTION, TARGET, TEXT_VALUE
 
 CLIENT = httpx.Client(http2=True, timeout=25)
 
@@ -45,12 +45,14 @@ def validate_choice(answer, ids):
     return answer
 
 
-def action_space(actions):
+def action_space(actions, uploads=True):
     """One index per observed element; each operation has its own valid target choices."""
     elements, indices, targets, controls = [], {}, {}, {}
-    operations = {"click": "CLICK", "fill": "TYPE_TEXT", "select": "SELECT"}
+    operations = {"click": "CLICK", "fill": "TYPE_TEXT", "select": "SELECT", "upload": "UPLOAD_FILE"}
     for action in actions:
         kind = action["kind"]
+        if kind == "upload" and not uploads:
+            continue
         if kind not in operations:
             controls[action["id"].upper()] = action
             continue
@@ -58,7 +60,8 @@ def action_space(actions):
         if node not in indices:
             index = str(len(elements) + 1)
             indices[node] = index
-            element = {k: action[k] for k in ("role", "value", "checked", "selected", "expanded") if k in action}
+            keys = ("role", "value", "checked", "selected", "expanded", "accept", "multiple")
+            element = {k: action[k] for k in keys if k in action}
             element.update(index=index, label=action["label"].split(" → ")[0], operations=[])
             if kind == "select":
                 element["value"] = action.get("current_value", "")
@@ -78,12 +81,14 @@ def action_space(actions):
     return elements, targets, controls
 
 
-def choose(state, goal, history):
-    elements, targets, controls = action_space(state["actions"])
+def choose(state, goal, history, files=()):
+    """files are caller-provided display names. The model may pick one of them, never a path."""
+    elements, targets, controls = action_space(state["actions"], uploads=bool(files))
     labels = {
         "CLICK": "Click an element, button, menu option, autocomplete suggestion, or calendar day.",
         "TYPE_TEXT": "Enter or replace text in an editable field. A small LLM will supply the value from the goal.",
         "SELECT": "Select an observed dropdown value.",
+        "UPLOAD_FILE": "Attach one of the provided files to a file input.",
     }
     operations = {key: labels[key] for key in targets}
     operations.update({key: value["label"] for key, value in controls.items()})
@@ -104,11 +109,19 @@ def choose(state, goal, history):
             },
             "instructions": {"goal": goal, "operation": operation, "rules": [NEXT_ACTION, TARGET]},
         }
+    file_ids = {f"f{i + 1}": name for i, name in enumerate(files)}
+    if "UPLOAD_FILE" in targets:
+        questions["upload_file"] = {
+            "type": "choice",
+            "criteria": {key: {"file": name} for key, name in file_ids.items()},
+            "instructions": {"goal": goal, "operation": "UPLOAD_FILE", "rules": FILE},
+        }
     body = {
         "model": os.environ.get("TYPESAFE_MODEL", "jev-latest"),
         "state": {
             "page": {k: state[k] for k in ("url", "title", "text")},
             "elements": elements,
+            **({"files_to_upload": list(files)} if files else {}),
             "recent_actions": [
                 {k: h.get(k) for k in ("action", "kind", "text", "page_changed")} for h in history[-10:]
             ],
@@ -121,6 +134,7 @@ def choose(state, goal, history):
     operation = operation_answer["choice"]
     target = None
     target_answer = None
+    file = None
     probabilities = {}
     if operation in targets:
         # Unused target heads cannot cause an action. Validate the head selected by the operation.
@@ -128,6 +142,8 @@ def choose(state, goal, history):
         target = target_answer["choice"]
         choice = targets[operation][target]["id"]
         probabilities = {a["id"]: target_answer["probabilities"][index] for index, a in targets[operation].items()}
+        if operation == "UPLOAD_FILE":
+            file = file_ids[validate_choice(result["answers"].get("upload_file", {}), file_ids)["choice"]]
     else:
         choice = controls[operation]["id"] if operation in controls else operation
         probabilities[choice] = operation_answer["probabilities"][operation]
@@ -135,6 +151,7 @@ def choose(state, goal, history):
         "choice": choice,
         "operation": operation,
         "target": target,
+        "file": file,
         "confidence": operation_answer["confidence"],
         "probabilities": probabilities,
         "operation_probabilities": operation_answer["probabilities"],

@@ -1,0 +1,75 @@
+{
+  "manifest_version": "0.4",
+  "name": "jev-browser",
+  "display_name": "Jev Browser",
+  "version": "0.1.0",
+  "description": "Hand one natural-language browser goal to the Jev agent, which drives your Chrome.",
+  "long_description": "Jev opens a new tab in your Chrome, picks operations and observed elements with TypeSafe, and returns the executed steps and the final page. It can upload files from one folder you choose. Chrome must allow remote debugging (chrome://inspect/#remote-debugging).",
+  "author": { "name": "Jonas Reif" },
+  "repository": { "type": "git", "url": "https://github.com/JonasReif/Jev-Browser" },
+  "license": "MIT",
+  "icon": "icon.png",
+  "server": {
+    "type": "uv",
+    "entry_point": "server.py",
+    "mcp_config": {
+      "command": "uv",
+      "args": ["run", "--directory", "${__dirname}", "--no-dev", "--frozen", "server.py"],
+      "env": {
+        "TYPESAFE_API_KEY": "${user_config.typesafe_api_key}",
+        "TEXT_MODEL_API_KEY": "${user_config.text_model_api_key}",
+        "TEXT_MODEL_BASE_URL": "${user_config.text_model_base_url}",
+        "TEXT_MODEL": "${user_config.text_model}",
+        "TEXT_MODEL_REASONING": "none",
+        "JEV_UPLOAD_DIR": "${user_config.upload_directory}"
+      }
+    }
+  },
+  "tools": [
+    { "name": "browser_task", "description": "Run one browser goal in a new Chrome tab and return steps and the final page." },
+    { "name": "read_page", "description": "Read a page's visible text and controls without model calls." },
+    { "name": "list_upload_files", "description": "List the files browser_task may upload." }
+  ],
+  "user_config": {
+    "typesafe_api_key": {
+      "type": "string",
+      "title": "TypeSafe API key",
+      "description": "Chooses each operation and target.",
+      "sensitive": true,
+      "required": true
+    },
+    "text_model_api_key": {
+      "type": "string",
+      "title": "Text model API key",
+      "description": "OpenAI-compatible key (OpenRouter by default). Needed only for typing into fields.",
+      "sensitive": true,
+      "required": false
+    },
+    "text_model_base_url": {
+      "type": "string",
+      "title": "Text model endpoint",
+      "description": "OpenAI-compatible base URL.",
+      "default": "https://openrouter.ai/api/v1",
+      "required": false
+    },
+    "text_model": {
+      "type": "string",
+      "title": "Text model",
+      "description": "Model that writes field values.",
+      "default": "inception/mercury-2.5",
+      "required": false
+    },
+    "upload_directory": {
+      "type": "directory",
+      "title": "Upload folder",
+      "description": "The only folder whose files the agent may upload to websites.",
+      "default": "${HOME}/JevUploads",
+      "required": false
+    }
+  },
+  "compatibility": {
+    "platforms": ["darwin", "win32", "linux"],
+    "runtimes": { "python": ">=3.12" }
+  },
+  "keywords": ["browser", "automation", "agent", "chrome"]
+}
