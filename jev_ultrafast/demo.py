@@ -23,7 +23,13 @@ AGENT = None
 def load_environment():
     path = Path.cwd() / ".env"
     if path.exists():
-        for line in path.read_text(encoding="utf-8").splitlines():
+        # .env is user-authored: honour UTF-8 (with or without BOM) but don't
+        # break .env files saved in the local codepage (e.g. GBK on Windows).
+        try:
+            text = path.read_text(encoding="utf-8-sig")
+        except UnicodeDecodeError:
+            text = path.read_text()
+        for line in text.splitlines():
             if "=" in line and not line.startswith("#"):
                 key, value = line.split("=", 1)
                 os.environ.setdefault(key, value)
