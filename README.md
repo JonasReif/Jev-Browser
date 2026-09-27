@@ -91,6 +91,41 @@ uv run --env-file .env python examples/run.py \
 
 `uv run --env-file .env python examples/flights.py --keep-open` performs the flight search, checks the actual route/date/results, and saves its trace. It does not select or book a flight.
 
+## Use it from Claude or ChatGPT (MCP)
+
+`uv run jev-mcp` exposes the agent as an [MCP](https://modelcontextprotocol.io) server with two tools:
+
+| Tool | What it does |
+| --- | --- |
+| `browser_task(goal, url, max_seconds=120, screenshot=False)` | Opens `url` in a new tab of your Chrome, runs the same loop as above, and returns the status (`done`, `blocked`, `timeout`, `error`), the executed steps, model-call counts, and the final page text. |
+| `read_page(url, screenshot=False)` | Returns the visible text and indexed elements of a page. No model calls, no input. |
+
+The calling assistant plans; Jev executes one well-specified goal fast. `DONE` is still not proof: the result includes the final page so the caller can verify it. One task runs at a time, and each tab closes when its call returns.
+
+**Claude Desktop / Claude Code (local, stdio).** Chrome, the keys in `.env`, and the server all stay on your machine:
+
+```json
+{
+  "mcpServers": {
+    "jev-browser": {
+      "command": "uv",
+      "args": ["--directory", "/absolute/path/to/Jev-Browser", "run", "jev-mcp"]
+    }
+  }
+}
+```
+
+Put this in `claude_desktop_config.json`, or run `claude mcp add jev-browser -- uv --directory /absolute/path/to/Jev-Browser run jev-mcp`.
+
+**ChatGPT or claude.ai (remote, Streamable HTTP).** Both connect from their servers, so the endpoint must be reachable from the internet, for example through a tunnel:
+
+```bash
+cloudflared tunnel --url http://127.0.0.1:8767        # or: ngrok http 8767
+uv run jev-mcp --http --public-host <tunnel-hostname>  # prints the connector URL
+```
+
+Add the printed `https://<tunnel-hostname>/<token>/mcp` URL as a custom connector (ChatGPT developer mode, or claude.ai custom connectors). There are no accounts: the random path segment is the only credential, and anyone holding the URL can drive your logged-in Chrome. Set `JEV_MCP_TOKEN` in `.env` to keep the URL across restarts, and stop the tunnel when you are done. Requests with other `Host` headers are rejected.
+
 ## Why it moves
 
 - **One request per decision cycle.** Operation and target heads share the same observed state.
@@ -114,6 +149,7 @@ Every executed target is resolved from an observed node. The executor rechecks p
 | [model.py](jev_ultrafast/model.py) | Dynamic operation/target heads and text generation |
 | [questions.py](jev_ultrafast/questions.py) | Model instructions |
 | [demo.py](jev_ultrafast/demo.py) | Local inspector |
+| [mcp_server.py](jev_ultrafast/mcp_server.py) | MCP tools for Claude, ChatGPT, and other clients |
 
 ## Evidence and limits
 
