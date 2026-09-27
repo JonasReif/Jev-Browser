@@ -253,6 +253,26 @@ def test_observation_is_one_atomic_browser_read(monkeypatch):
     assert cdp.call_args.args[0] == "Runtime.evaluate"
 
 
+def test_browser_setup_failure_closes_its_target_without_masking_error(monkeypatch):
+    import jev_ultrafast.browser as browser
+
+    setup_error = RuntimeError("attach failed")
+    cleanup_error = RuntimeError("close failed")
+    cdp = Mock(side_effect=[{"targetId": "owned-target"}, setup_error, cleanup_error])
+    monkeypatch.setattr(browser, "ensure_daemon", Mock())
+    monkeypatch.setattr(browser, "cdp", cdp)
+
+    with pytest.raises(RuntimeError, match="attach failed") as raised:
+        browser.Browser("https://example.test/")
+
+    assert raised.value is setup_error
+    assert cdp.call_args_list == [
+        (("Target.createTarget",), {"url": "about:blank", "background": True}),
+        (("Target.attachToTarget",), {"targetId": "owned-target", "flatten": True}),
+        (("Target.closeTarget",), {"targetId": "owned-target"}),
+    ]
+
+
 def test_executor_rejects_a_stale_page_before_browser_input(monkeypatch):
     import jev_ultrafast.browser as browser
 
