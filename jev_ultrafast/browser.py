@@ -86,7 +86,7 @@ class Browser:
         raise StalePage("Page did not settle")
 
     def fresh(self, page, action=None):
-        if action is not None and action["kind"] in {"click", "select"}:
+        if action is not None and action["kind"] in {"click", "select", "press_enter"}:
             node = action["node"]
             if type(node) is not int:
                 return False
@@ -146,6 +146,12 @@ def browser_operation(request):
               if (!e?.isConnected || e.matches(':disabled') || e.closest('[aria-disabled="true"],[inert]') ||
                   !e.checkVisibility({checkOpacity:true,checkVisibilityCSS:true})) return null;
               if (action.kind==='fill' && (e.readOnly || e.getAttribute('aria-readonly')==='true')) return null;
+              if (action.kind==='press_enter' &&
+                  ((e.tagName!=='INPUT' && e.tagName!=='TEXTAREA') ||
+                   e.value!==action.value || !e.value.trim() ||
+                   !(e.type==='search' || e.getAttribute('role')==='searchbox' ||
+                     (e.getAttribute('role')==='combobox' &&
+                      /search/i.test(action.label))))) return null;
               const r=e.getBoundingClientRect(), x=r.x+r.width/2, y=r.y+r.height/2;
               if (!r.width || !r.height || x<0 || y<0 || x>=innerWidth || y>=innerHeight) return null;
               if (!e.contains(document.elementFromPoint(x,y))) return null;
@@ -166,6 +172,17 @@ def browser_operation(request):
                 x, y = target["x"], target["y"]
                 for event in ("mousePressed", "mouseReleased"):
                     call("Input.dispatchMouseEvent", type=event, x=x, y=y, button="left", clickCount=1)
+                if kind == "press_enter":
+                    focused = evaluate("""(action => {
+                      const e=window.__jevFast?.nodes.get(action.node);
+                      return document.activeElement===e && e?.value===action.value;
+                    })(""" + json.dumps(action) + ")")
+                    if not focused:
+                        raise StalePage("Search field changed or lost focus before Enter. Observe again.")
+                    call("Input.dispatchKeyEvent", type="keyDown", key="Enter", code="Enter",
+                         windowsVirtualKeyCode=13, nativeVirtualKeyCode=13, text="\r")
+                    call("Input.dispatchKeyEvent", type="keyUp", key="Enter", code="Enter",
+                         windowsVirtualKeyCode=13, nativeVirtualKeyCode=13)
                 if kind == "fill":
                     call(
                         "Input.dispatchKeyEvent",

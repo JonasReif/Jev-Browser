@@ -77,6 +77,11 @@
         e.isContentEditable || rname==='combobox' ? e.innerText.trim() : '';
       actions.push({...base,kind:editable?'fill':'click',value});
       if (editable) actions.push({...base,kind:'click',value,label:'Open '+base.label});
+      // A populated search field may need Enter when no submit control is exposed.
+      // Keep the action tied to this observed node; never offer it for email fields.
+      if (editable && value.trim() && (e.type==='search' || rname==='searchbox' ||
+          (rname==='combobox' && /search/i.test(base.label))))
+        actions.push({...base,kind:'press_enter',value,label:'Submit '+base.label+' with Enter'});
     }
   }
   const words=[], walker=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT);
