@@ -28,7 +28,9 @@ Every observation produces a new element table:
 ...
 ```
 
-The operations are `CLICK`, `TYPE_TEXT`, `SELECT`, `SCROLL_UP`, `SCROLL_DOWN`, `WAIT`, `DONE`, and `BLOCKED`. Only supported operations and targets are offered.
+The operations are `CLICK`, `TYPE_TEXT`, `SELECT`, `UPLOAD_FILE`, `SCROLL_UP`, `SCROLL_DOWN`, `WAIT`, `DONE`, and `BLOCKED`. Only supported operations and targets are offered.
+
+`UPLOAD_FILE` exists only when the caller passes files (`Agent(url, goal, files=[...])`). The model picks an observed file input and one of those files by name; it never sees or produces a path. Chrome receives the file through `DOM.setFileInputFiles`, so no native dialog opens. File inputs hidden behind a styled label count as observed when the label is visible.
 
 ```text
                       one TypeSafe request
@@ -91,6 +93,44 @@ uv run --env-file .env python examples/run.py \
 
 `uv run --env-file .env python examples/flights.py --keep-open` performs the flight search, checks the actual route/date/results, and saves its trace. It does not select or book a flight.
 
+## Use it from Claude or ChatGPT (MCP)
+
+`uv run jev-mcp` exposes the agent as an [MCP](https://modelcontextprotocol.io) server with three tools:
+
+| Tool | What it does |
+| --- | --- |
+| `browser_task(goal, url, files=[], max_seconds=120, screenshot=False)` | Opens `url` in a new tab of your Chrome, runs the same loop as above, and returns the status (`done`, `blocked`, `timeout`, `error`), the executed steps, model-call counts, and the final page text. `files` names files from the upload folder that the agent may attach. |
+| `read_page(url, screenshot=False)` | Returns the visible text and indexed elements of a page. No model calls, no input. |
+| `list_upload_files()` | Lists the upload folder (`JEV_UPLOAD_DIR`, default `~/JevUploads`). Only files inside it can be uploaded; `..` paths and symlinks that leave it are rejected. |
+
+The calling assistant plans; Jev executes one well-specified goal fast. `DONE` is still not proof: the result includes the final page so the caller can verify it. One task runs at a time, and each tab closes when its call returns.
+
+**Claude Desktop (extension).** `uv run python scripts/build_mcpb.py` packs `dist/jev-browser.mcpb`. Double-click it, or use **Settings → Extensions → Advanced settings → Install Extension…**, then enter the keys and pick the upload folder in the form Claude Desktop shows. The keys are stored by Claude Desktop, not in the bundle. Claude Desktop runs the server with `uv`; install [uv](https://docs.astral.sh/uv/) if the extension fails to start.
+
+**Claude Code or a manual Claude Desktop config (local, stdio).** Chrome, the keys in `.env`, and the server all stay on your machine:
+
+```json
+{
+  "mcpServers": {
+    "jev-browser": {
+      "command": "uv",
+      "args": ["--directory", "/absolute/path/to/Jev-Browser", "run", "jev-mcp"]
+    }
+  }
+}
+```
+
+Put this in `claude_desktop_config.json`, or run `claude mcp add jev-browser -- uv --directory /absolute/path/to/Jev-Browser run jev-mcp`.
+
+**ChatGPT or claude.ai (remote, Streamable HTTP).** Both connect from their servers, so the endpoint must be reachable from the internet, for example through a tunnel:
+
+```bash
+cloudflared tunnel --url http://127.0.0.1:8767        # or: ngrok http 8767
+uv run jev-mcp --http --public-host <tunnel-hostname>  # prints the connector URL
+```
+
+Add the printed `https://<tunnel-hostname>/<token>/mcp` URL as a custom connector (ChatGPT developer mode, or claude.ai custom connectors). There are no accounts: the random path segment is the only credential, and anyone holding the URL can drive your logged-in Chrome. Set `JEV_MCP_TOKEN` in `.env` to keep the URL across restarts, and stop the tunnel when you are done. Requests with other `Host` headers are rejected. Uploads work the same way remotely: put the file into the upload folder on the computer that runs Chrome, and the assistant finds it with `list_upload_files`.
+
 ## Why it moves
 
 - **One request per decision cycle.** Operation and target heads share the same observed state.
@@ -114,6 +154,7 @@ Every executed target is resolved from an observed node. The executor rechecks p
 | [model.py](jev_ultrafast/model.py) | Dynamic operation/target heads and text generation |
 | [questions.py](jev_ultrafast/questions.py) | Model instructions |
 | [demo.py](jev_ultrafast/demo.py) | Local inspector |
+| [mcp_server.py](jev_ultrafast/mcp_server.py) | MCP tools for Claude, ChatGPT, and other clients |
 
 ## Evidence and limits
 
@@ -123,7 +164,7 @@ In six alternating runs with identical models and settings, both versions passed
 
 The same policy opened the requested Wikipedia article in **2.798 s** and passed a local hotel search/filter task in **1.896 s**. Runs, failures, source hashes, and measurement boundaries are in [performance.md](docs/performance.md).
 
-A `DONE` choice still requires independent outcome verification. The DOM reader handles common HTML and ARIA controls, not the full accessible-name specification. Shadow roots, frames, canvas, uploads, pop-up tabs, nested scrolling, and arbitrary keyboard widgets remain outside this MVP. Owned tabs share the existing Chrome profile.
+A `DONE` choice still requires independent outcome verification. The DOM reader handles common HTML and ARIA controls, not the full accessible-name specification. Shadow roots, frames, canvas, drag-and-drop-only upload zones, pop-up tabs, nested scrolling, and arbitrary keyboard widgets remain outside this MVP. Uploads need the file on the machine that runs Chrome. Owned tabs share the existing Chrome profile.
 
 ## Development
 
@@ -135,7 +176,7 @@ node --check jev_ultrafast/snapshot.js
 uv build
 ```
 
-Tests are offline. `uv run python scripts/check_guards.py` checks real controls in a local browser without model calls. Live examples and recording scripts make paid API calls. `scripts/record_flights.py <new-folder>` captures original browser timestamps; `scripts/render_demo.py <recording-folder>` renders that verified run at 1× and crops out the Google account strip. Credentials and raw traces stay ignored.
+`uv run python scripts/build_mcpb.py` packs the Claude Desktop extension into `dist/`. Tests are offline. `uv run python scripts/check_guards.py` checks real controls in a local browser without model calls. Live examples and recording scripts make paid API calls. `scripts/record_flights.py <new-folder>` captures original browser timestamps; `scripts/render_demo.py <recording-folder>` renders that verified run at 1× and crops out the Google account strip. Credentials and raw traces stay ignored.
 
 ---
 

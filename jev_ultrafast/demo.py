@@ -20,8 +20,8 @@ LOCK = threading.Lock()
 AGENT = None
 
 
-def load_environment():
-    path = Path.cwd() / ".env"
+def load_environment(path=None):
+    path = path or Path.cwd() / ".env"
     if path.exists():
         for line in path.read_text().splitlines():
             if "=" in line and not line.startswith("#"):
