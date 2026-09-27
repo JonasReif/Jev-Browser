@@ -2,6 +2,7 @@
 
 import atexit
 import json
+import locale
 import os
 import secrets
 import threading
@@ -20,16 +21,20 @@ LOCK = threading.Lock()
 AGENT = None
 
 
+def _read_env_text(path: Path) -> str:
+    # .env is user-authored: honour utf-8 (with or without BOM) first, then the
+    # locale codec, so a GBK-encoded file on Windows still loads instead of
+    # raising UnicodeDecodeError and blocking the demo at startup.
+    try:
+        return path.read_text(encoding="utf-8-sig")
+    except UnicodeDecodeError:
+        return path.read_text(encoding=locale.getpreferredencoding(False))
+
+
 def load_environment():
     path = Path.cwd() / ".env"
     if path.exists():
-        # .env is user-authored: honour UTF-8 (with or without BOM) but don't
-        # break .env files saved in the local codepage (e.g. GBK on Windows).
-        try:
-            text = path.read_text(encoding="utf-8-sig")
-        except UnicodeDecodeError:
-            text = path.read_text()
-        for line in text.splitlines():
+        for line in _read_env_text(path).splitlines():
             if "=" in line and not line.startswith("#"):
                 key, value = line.split("=", 1)
                 os.environ.setdefault(key, value)
