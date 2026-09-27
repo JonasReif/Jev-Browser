@@ -28,7 +28,7 @@ Every observation produces a new element table:
 ...
 ```
 
-The operations are `CLICK`, `TYPE_TEXT`, `SELECT`, `SCROLL_UP`, `SCROLL_DOWN`, `WAIT`, `DONE`, and `BLOCKED`. Only supported operations and targets are offered.
+The operations are `CLICK`, `TYPE_TEXT`, `SELECT`, `PRESS_ENTER`, `SCROLL_UP`, `SCROLL_DOWN`, `WAIT`, `DONE`, and `BLOCKED`. Only supported operations and targets are offered. `PRESS_ENTER` targets a populated search field when it needs keyboard submission.
 
 ```text
                       one TypeSafe request
