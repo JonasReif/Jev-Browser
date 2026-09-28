@@ -11,8 +11,9 @@ from jev_ultrafast import mcp_server
 class FakeAgent:
     instances = []
 
-    def __init__(self, url, goal, outcomes, files=()):
+    def __init__(self, url, goal, outcomes, files=(), values=None):
         self.files = list(files)
+        self.values = values
         self.outcomes = list(outcomes)
         self.ticks = 0
         self.closed = False
@@ -42,7 +43,9 @@ class FakeAgent:
 def use_agent(monkeypatch, *outcomes):
     FakeAgent.instances.clear()
     monkeypatch.setenv("TYPESAFE_API_KEY", "test")
-    monkeypatch.setattr(mcp_server, "Agent", lambda url, goal, files=(): FakeAgent(url, goal, outcomes, files))
+    monkeypatch.setattr(
+        mcp_server, "Agent", lambda url, goal, files=(), values=None: FakeAgent(url, goal, outcomes, files, values)
+    )
 
 
 def run_task(**kwargs):
@@ -155,3 +158,9 @@ def test_unset_mcpb_settings_do_not_mask_defaults(monkeypatch):
     mcp_server.main()
     assert "TEXT_MODEL" not in mcp_server.os.environ and "TEXT_MODEL_API_KEY" not in mcp_server.os.environ
     assert mcp_server.os.environ["TYPESAFE_API_KEY"] == "kept"
+
+
+def test_caller_values_reach_the_agent(monkeypatch):
+    use_agent(monkeypatch, "DONE")
+    run_task(values={"email": "jonas@example.test"})
+    assert FakeAgent.instances[0].values == {"email": "jonas@example.test"}

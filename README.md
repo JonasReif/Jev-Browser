@@ -19,7 +19,7 @@ I use it in my own Claude Cowork setup for recurring multi-step web workflows.
 
 **A browser agent with a dynamic, indexed action space.**
 
-Give it one goal. [TypeSafe's Jev](https://docs.typesafe.ai/introduction) picks an operation and an element. A small LLM writes text only when the operation is `TYPE_TEXT`.
+Give it one goal. [TypeSafe's Jev](https://docs.typesafe.ai/introduction) picks an operation and an element. A small LLM writes text only when the operation is `TYPE_TEXT`, unless the caller already supplied the text.
 
 **Zürich → London on Google Flights in 7.1 seconds.** One natural-language goal, actual text generation, and loading waits included.
 
@@ -42,6 +42,8 @@ Every observation produces a new element table:
 The operations are `CLICK`, `TYPE_TEXT`, `SELECT`, `UPLOAD_FILE`, `SCROLL_UP`, `SCROLL_DOWN`, `WAIT`, `DONE`, and `BLOCKED`. Only supported operations and targets are offered.
 
 `UPLOAD_FILE` exists only when the caller passes files (`Agent(url, goal, files=[...])`). The model picks an observed file input and one of those files by name; it never sees or produces a path. Chrome receives the file through `DOM.setFileInputFiles`, so no native dialog opens. File inputs hidden behind a styled label count as observed when the label is visible.
+
+`values` works the same way for text: `Agent(url, goal, values={"email": "a@b.de"})` adds a value head to the same TypeSafe request, and `TYPE_TEXT` types the chosen caller text verbatim. No text-model call and no `TEXT_MODEL_API_KEY` are needed. Through MCP, the calling assistant (Claude or ChatGPT, on its own subscription) writes these values.
 
 ```text
                       one TypeSafe request
@@ -110,7 +112,7 @@ uv run --env-file .env python examples/run.py \
 
 | Tool | What it does |
 | --- | --- |
-| `browser_task(goal, url, files=[], max_seconds=120, screenshot=False)` | Opens `url` in a new tab of your Chrome, runs the same loop as above, and returns the status (`done`, `blocked`, `timeout`, `error`), the executed steps, model-call counts, and the final page text. `files` names files from the upload folder that the agent may attach. |
+| `browser_task(goal, url, files=[], values={}, max_seconds=120, screenshot=False)` | Opens `url` in a new tab of your Chrome, runs the same loop as above, and returns the status (`done`, `blocked`, `timeout`, `error`), the executed steps, model-call counts, and the final page text. `files` names files from the upload folder that the agent may attach. `values` holds the exact text to type, written by the calling assistant; with it, no text-model key is needed. |
 | `read_page(url, screenshot=False)` | Returns the visible text and indexed elements of a page. No model calls, no input. |
 | `list_upload_files()` | Lists the upload folder (`JEV_UPLOAD_DIR`, default `~/JevUploads`). Only files inside it can be uploaded; `..` paths and symlinks that leave it are rejected. |
 

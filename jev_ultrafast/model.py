@@ -7,7 +7,7 @@ import time
 
 import httpx
 
-from .questions import FILE, NEXT_ACTION, TARGET, TEXT_VALUE
+from .questions import FILE, NEXT_ACTION, TARGET, TEXT_VALUE, VALUE
 
 CLIENT = httpx.Client(http2=True, timeout=25)
 
@@ -81,8 +81,10 @@ def action_space(actions, uploads=True):
     return elements, targets, controls
 
 
-def choose(state, goal, history, files=()):
-    """files are caller-provided display names. The model may pick one of them, never a path."""
+def choose(state, goal, history, files=(), values=None):
+    """files are caller-provided display names; values maps caller-provided names to exact text.
+    With values, TYPE_TEXT picks one of them in this request instead of calling a text model."""
+    values = values or {}
     elements, targets, controls = action_space(state["actions"], uploads=bool(files))
     labels = {
         "CLICK": "Click an element, button, menu option, autocomplete suggestion, or calendar day.",
@@ -90,6 +92,8 @@ def choose(state, goal, history, files=()):
         "SELECT": "Select an observed dropdown value.",
         "UPLOAD_FILE": "Attach one of the provided files to a file input.",
     }
+    if values:
+        labels["TYPE_TEXT"] = "Type one of the provided values into an editable field. Use only when one fits."
     operations = {key: labels[key] for key in targets}
     operations.update({key: value["label"] for key, value in controls.items()})
     operations.update(DONE="Every requirement is visibly satisfied.", BLOCKED="No supported operation can progress.")
@@ -116,12 +120,20 @@ def choose(state, goal, history, files=()):
             "criteria": {key: {"file": name} for key, name in file_ids.items()},
             "instructions": {"goal": goal, "operation": "UPLOAD_FILE", "rules": FILE},
         }
+    value_ids = {f"v{i + 1}": name for i, name in enumerate(values)}
+    if values and "TYPE_TEXT" in targets:
+        questions["type_text_value"] = {
+            "type": "choice",
+            "criteria": {key: {"name": name, "text": values[name]} for key, name in value_ids.items()},
+            "instructions": {"goal": goal, "operation": "TYPE_TEXT", "rules": VALUE},
+        }
     body = {
         "model": os.environ.get("TYPESAFE_MODEL", "jev-latest"),
         "state": {
             "page": {k: state[k] for k in ("url", "title", "text")},
             "elements": elements,
             **({"files_to_upload": list(files)} if files else {}),
+            **({"values_to_type": list(values)} if values else {}),
             "recent_actions": [
                 {k: h.get(k) for k in ("action", "kind", "text", "page_changed")} for h in history[-10:]
             ],
@@ -135,6 +147,7 @@ def choose(state, goal, history, files=()):
     target = None
     target_answer = None
     file = None
+    value = None
     probabilities = {}
     if operation in targets:
         # Unused target heads cannot cause an action. Validate the head selected by the operation.
@@ -144,6 +157,8 @@ def choose(state, goal, history, files=()):
         probabilities = {a["id"]: target_answer["probabilities"][index] for index, a in targets[operation].items()}
         if operation == "UPLOAD_FILE":
             file = file_ids[validate_choice(result["answers"].get("upload_file", {}), file_ids)["choice"]]
+        if operation == "TYPE_TEXT" and values:
+            value = value_ids[validate_choice(result["answers"].get("type_text_value", {}), value_ids)["choice"]]
     else:
         choice = controls[operation]["id"] if operation in controls else operation
         probabilities[choice] = operation_answer["probabilities"][operation]
@@ -152,6 +167,7 @@ def choose(state, goal, history, files=()):
         "operation": operation,
         "target": target,
         "file": file,
+        "value": value,
         "confidence": operation_answer["confidence"],
         "probabilities": probabilities,
         "operation_probabilities": operation_answer["probabilities"],
@@ -177,7 +193,9 @@ def field_context(goal, action, page, history):
 def field_text(context):
     key = os.environ.get("TEXT_MODEL_API_KEY")
     if not key:
-        raise ValueError("TYPE_TEXT needs TEXT_MODEL_API_KEY; no text is hardcoded or guessed by the executor.")
+        raise ValueError(
+            "TYPE_TEXT needs caller-provided values or TEXT_MODEL_API_KEY; no text is hardcoded or guessed."
+        )
     base = os.environ.get("TEXT_MODEL_BASE_URL", "https://api.deepseek.com/v1").rstrip("/")
     model = os.environ.get("TEXT_MODEL", "deepseek-chat")
     reasoning = {"thinking": {"type": "disabled"}} if "api.deepseek.com/" in base else {"reasoning": {"effort": "low"}}
