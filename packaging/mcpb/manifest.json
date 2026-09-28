@@ -41,7 +41,7 @@
     "text_model_api_key": {
       "type": "string",
       "title": "Text model API key",
-      "description": "OpenAI-compatible key (OpenRouter by default). Needed only for typing into fields.",
+      "description": "Optional. Leave empty and Claude supplies the text to type itself. Otherwise an OpenAI-compatible key (OpenRouter by default).",
       "sensitive": true,
       "required": false
     },

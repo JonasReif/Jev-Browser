@@ -105,6 +105,7 @@ async def browser_task(
     goal: str,
     url: str,
     files: list[str] | None = None,
+    values: dict[str, str] | None = None,
     max_seconds: int = 120,
     screenshot: bool = False,
     ctx: Context = None,
@@ -114,6 +115,9 @@ async def browser_task(
     goal: one natural-language task, including every value the agent needs (names, dates, search terms).
     url: the http(s) page to start from.
     files: names from list_upload_files that the agent may attach to file inputs. Say in goal which file goes where.
+    values: the exact text to type, keyed by what it is, e.g. {"email": "a@b.de", "message": "Hello ..."}.
+        Write every value the form needs. With values, typing chooses among them and makes no text-model call.
+        Without values, typing needs TEXT_MODEL_API_KEY on the server.
     max_seconds: wall-clock budget; the run stops after the current step once it is exceeded.
     screenshot: also return a JPEG of the final page.
 
@@ -125,7 +129,7 @@ async def browser_task(
         raise ValueError("TYPESAFE_API_KEY is not set on the MCP server")
     paths = upload_paths(files or [])
     async with LOCK:
-        agent = await in_thread(lambda: Agent(url, goal, files=paths))
+        agent = await in_thread(lambda: Agent(url, goal, files=paths, values=values))
         try:
             deadline = time.monotonic() + max(5, max_seconds)
             status, error, reported = "timeout", None, 0

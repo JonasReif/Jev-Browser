@@ -162,6 +162,7 @@ def runner():
     a = loop.Agent.__new__(loop.Agent)
     a.screenshots = False
     a.files = {}
+    a.values = {}
     a.pending_text = None
     p = page()
     a.state = {
@@ -266,6 +267,82 @@ def test_interrupted_dropdown_mutation_cannot_be_retried_as_stale(monkeypatch, r
             "id": "e1", "kind": "select", "node": 1, "value": "Design",
         }})
     assert cdp.call_count == 1
+
+
+def test_values_let_type_text_choose_caller_text_in_the_same_request(monkeypatch):
+    def post(_url, _key, body):
+        q = body["questions"]
+        assert q["type_text_value"]["criteria"] == {
+            "v1": {"name": "search term", "text": "Gödel"},
+            "v2": {"name": "email", "text": "a@b.test"},
+        }
+        assert body["state"]["values_to_type"] == ["search term", "email"]
+        assert "provided values" in q["operation"]["criteria"]["TYPE_TEXT"]
+        return {"model": "jev", "answers": {
+            "operation": choice(list(q["operation"]["criteria"]), "TYPE_TEXT"),
+            "type_text_target": choice(list(q["type_text_target"]["criteria"]), "1"),
+            "type_text_value": choice(["v1", "v2"], "v1"),
+            "click_target": choice(list(q["click_target"]["criteria"]), "2"),
+        }}
+
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test")
+    monkeypatch.setattr(model, "post_json", post)
+    result = model.choose(page(), "Search", [], values={"search term": "Gödel", "email": "a@b.test"})
+    assert (result["choice"], result["value"]) == ("e1", "search term")
+
+
+def test_invented_value_choice_is_rejected(monkeypatch):
+    def post(_url, _key, body):
+        q = body["questions"]
+        return {"model": "jev", "answers": {
+            "operation": choice(list(q["operation"]["criteria"]), "TYPE_TEXT"),
+            "type_text_target": choice(list(q["type_text_target"]["criteria"]), "1"),
+            "type_text_value": choice(["v1", "v7"], "v7"),
+        }}
+
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test")
+    monkeypatch.setattr(model, "post_json", post)
+    with pytest.raises(ValueError, match="Invalid TypeSafe response"):
+        model.choose(page(), "Search", [], values={"search term": "Gödel"})
+
+
+def test_no_value_head_without_caller_values(monkeypatch):
+    bodies = []
+
+    def post(_url, _key, body):
+        bodies.append(body)
+        q = body["questions"]
+        return {"model": "jev", "answers": {
+            "operation": choice(list(q["operation"]["criteria"]), "CLICK"),
+            "click_target": choice(list(q["click_target"]["criteria"]), "2"),
+        }}
+
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test")
+    monkeypatch.setattr(model, "post_json", post)
+    assert model.choose(page(), "Search", [])["value"] is None
+    assert "type_text_value" not in bodies[0]["questions"] and "values_to_type" not in bodies[0]["state"]
+
+
+def test_agent_types_the_chosen_value_without_the_text_model(runner, monkeypatch):
+    helper = Mock()
+    monkeypatch.setattr(loop, "field_text", helper)
+    monkeypatch.delenv("TEXT_MODEL_API_KEY", raising=False)
+    runner.values = {"search term": "Gödel"}
+    runner.state["decision"] = {**decision(), "value": "search term"}
+    runner.command("act", {"fingerprint": runner.state["page"]["fingerprint"]})
+    helper.assert_not_called()
+    assert runner.state["browser"].act.call_args.kwargs["text"] == "Gödel"
+    assert runner.state["history"][-1]["text"] == "Gödel" and runner.state["text_calls"] == []
+
+
+@pytest.mark.parametrize("values", [{"": "x"}, {"email": ""}, {"email": 3}, {"note": "x" * 2001},
+                                    {str(i): "x" for i in range(51)}])
+def test_agent_rejects_unusable_values_before_opening_a_tab(values, monkeypatch):
+    opened = Mock()
+    monkeypatch.setattr(loop, "Browser", opened)
+    with pytest.raises(ValueError, match="Values must"):
+        loop.Agent("https://example.test/", "Search", values=values)
+    opened.assert_not_called()
 
 
 def upload_page():

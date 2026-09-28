@@ -10,7 +10,7 @@ from .questions import MAX_STEPS
 
 
 class Agent:
-    def __init__(self, url, goals, *, files=(), record_dir=None, screenshots=False):
+    def __init__(self, url, goals, *, files=(), values=None, record_dir=None, screenshots=False):
         task = goals.strip() if isinstance(goals, str) else "\n".join(goals).strip()
         if not task:
             raise ValueError("Supply a task")
@@ -18,6 +18,13 @@ class Agent:
         self.files = {Path(f).name: str(Path(f).resolve()) for f in files}
         if len(self.files) != len(files) or not all(Path(f).is_file() for f in self.files.values()):
             raise ValueError("Upload files must be existing files with distinct names")
+        # Caller-written text. With values, typing chooses among them and never calls the text model.
+        self.values = dict(values or {})
+        if len(self.values) > 50 or not all(
+            isinstance(k, str) and k.strip() and isinstance(v, str) and v.strip() and len(v) <= 2000
+            for k, v in self.values.items()
+        ):
+            raise ValueError("Values must be at most 50 named, non-empty texts of up to 2,000 characters")
         plan = [task]
         self.pending_text = None
         self.browser = Browser(url)
@@ -78,7 +85,9 @@ class Agent:
                 raise ValueError("This run has stopped. Start a fresh demo.")
             if len(state["decisions"]) >= MAX_STEPS * 2:
                 raise ValueError("Reached the demo's model-call budget")
-            state["decision"] = choose(state["page"], state["goal"], state["history"], list(self.files))
+            state["decision"] = choose(
+                state["page"], state["goal"], state["history"], list(self.files), self.values
+            )
             state["decisions"].append(
                 {
                     **state["decision"],
@@ -110,7 +119,9 @@ class Agent:
             if action["kind"] == "upload":
                 text = decision["file"]
                 file = self.files[text]
-            if action["kind"] == "fill":
+            if action["kind"] == "fill" and self.values:
+                text = self.values[decision["value"]]
+            elif action["kind"] == "fill":
                 if not state["browser"].fresh(page):
                     raise StalePage("Page changed before text generation. Choose again.")
                 context = field_context(state["goal"], action, page, state["history"])

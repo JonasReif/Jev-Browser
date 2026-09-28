@@ -27,4 +27,8 @@ FILE = """Choose which provided file to attach if the next operation is UPLOAD_F
 Match the input's label, accepted types, and nearby text to the user's goal. Do not attach a file
 the input already contains. Choose only an offered file."""
 
+VALUE = """Choose which provided value to type if the next operation is TYPE_TEXT.
+Match the field's label, role, and nearby text to each value's name. Do not choose a value the field
+already contains. Choose only an offered value."""
+
 MAX_STEPS = 60
